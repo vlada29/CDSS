@@ -1,0 +1,278 @@
+package drools.spring.rules;
+
+import drools.spring.example.facts.Item;
+
+
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Date;
+import drools.spring.example.facts.Prioritet;
+import drools.spring.example.facts.Illness;
+import drools.spring.example.facts.Symptom;
+import drools.spring.example.facts.Izvestaj;
+import drools.spring.example.facts.Doctor;
+import drools.spring.example.facts.Drug;
+import drools.spring.example.facts.Diagnose;
+import drools.spring.example.facts.Patient;
+
+//declare any global variables here
+
+global Boolean pronadjena;
+global Illness bolest;
+global Date trenutniDatum;
+global Long dveGodine;
+global Long sestMeseci;
+global Long godina;
+global ArrayList<Doctor> lekari;
+global ArrayList<Illness> imunitetBolesti;
+
+rule "Izbaci sve bolesti koje ne sadrze neki od simptoma"
+	agenda-group "pocetnoIzbacivanje"
+    when
+        $s : Symptom()
+        $i : Illness( $s not memberOf symptoms, symptoms not contains $s )
+    then
+        delete($i);
+end
+
+
+	
+rule "Izbaci sve bolesti prve grupe koje ne sadrze 4 simptoma"	
+	agenda-group "filter"
+	when
+		$list : List( size < 4 ) from collect (Symptom())
+		$i : Illness ( group == 1 )
+	then
+		delete($i);
+end
+
+rule "Izbaci sve bolesti druge grupe kojima nisu svi simptomi zadovoljeni"
+	agenda-group "filter"
+	when
+		$list : List() from collect (Symptom())
+		$i : Illness ( symptoms.size() > $list.size() && group == 2)
+	then
+		delete($i);
+end
+
+rule "Izbaci sve bolesti iz trece grupe koje nemaju makar jedan specifican i dva obicna simptoma"
+	agenda-group "filter"
+	when
+		$list1 : List( ) from collect (Symptom( special == false ))
+		$list2 : List( ) from collect (Symptom( special == true ))
+		$i : Illness( group == 3 && ($list1.size() < 2 || $list2.size() < 1))
+	then
+		delete($i);
+end
+
+
+
+rule "Ako neka bolest ima sve simptome zadovoljene nju vracamo"
+	agenda-group "final"
+	when
+		$list : List( ) from collect (Symptom()) 
+		$i : Illness( symptoms.size() == $list.size() && pronadjena == false)
+	then
+		System.out.println("Nabo sve");
+		pronadjena = true;
+		bolest = $i;
+end
+
+rule "Vracamo bolest kojoj fali najmanje simptoma da svi budu zadovoljeni"
+	agenda-group "final"
+	when
+		$list1 : List( ) from collect (Symptom())
+		$list2 : List( ) from collect (Illness())
+
+		$minimum : Number( ) from accumulate (
+			Illness(
+				$r : symptoms.size()
+			)from $list2,
+			init(int count = 100;),
+        	action( if(count > ($r - $list1.size())){ count = ($r - $list1.size());} ),
+        	result( count )
+		)
+		
+		$i : Illness((symptoms.size() - $list1.size()) == $minimum)
+		
+	then
+		bolest.setName($i.getName());
+		bolest.setSymptoms($i.getSymptoms());
+		bolest.setGroup($i.getGroup());
+end
+
+
+
+rule "Dodavanje povezanih bolesti sa brojem simtpoma brSym"
+	agenda-group "povezaneBolesti"
+	when
+		$al : ArrayList()
+		$list : List( ) from collect (Symptom())
+		$i : Illness($sym : symptoms)
+		$simptoma : Integer() from accumulate (
+			$s : Symptom()
+		from $sym,
+		init(int count = 0;)
+		action( if($list.contains($s)){count++;} )
+		result( count )	
+		)
+		$pr : Prioritet(brSym > $simptoma && $simptoma != 0)
+	then
+		$al.add(0,$i);
+		delete($i);
+end
+
+rule "Povecavanje broja simptoma da bi se mogle dodati i ostale bolesti"
+	agenda-group "povezaneBolesti"
+	when
+		$al : ArrayList()
+		$list : List( ) from collect (Symptom())
+		$i : Illness($sym : symptoms)
+		$simptoma : Integer() from accumulate (
+			$s : Symptom()
+		from $sym,
+		init(int count = 0;)
+		action( if($list.contains($s)){count++;} )
+		result( count )	
+		)
+		$pr : Prioritet(brSym <= $simptoma && $simptoma != 0)
+	then
+		modify($pr){setBrSym($pr.getBrSym()+1);}
+end
+
+
+rule "Pravljenje izvestaja za svakog pacijenta koji je 5 puta bolovao od iste bolesti u poslednje 2 godine"
+	agenda-group "hronicni"
+	when
+		$p : Patient($diag : dijagnostikovaneBolesti)
+		$i : Illness()
+		Number(intValue > 5) from accumulate (
+			$d : Diagnose(
+				dijagnostikovanaBolest.name == $i.name
+			)from $diag,
+			init(int count = 0;),
+			action(if((trenutniDatum.getTime() - $d.datumDijagnoze.getTime()) < dveGodine) {count++;}),
+			result(count)
+		)
+	then
+		insert (new Izvestaj($p.getFirstName(),$p.getLastName(),$i.getName()));
+end
+
+rule "Izbacivanje izvestaja sa prehladama"
+	agenda-group "hronicni"
+	when
+		$i : Izvestaj(detalji == "Prehlada")
+	then
+		delete($i);
+end
+
+
+rule "Izbacivanje izvestaja sa groznicama"
+	agenda-group "hronicni"
+	when
+		$i : Izvestaj(detalji == "Groznica")
+	then
+		delete($i);
+end
+
+rule "Ciscenje lekara"
+	agenda-group "zavisnici"
+	salience 2
+	when
+		Patient()
+	then
+		lekari.clear();
+end
+
+rule "Pravljenje izvestaja za pacijenta kojem su barem 6 puta prepisani analgetici u poslednjih 6 meseci od strane 3 ili vise lakara"
+	agenda-group "zavisnici"
+	salience 1
+	when
+		$p : Patient($diag : dijagnostikovaneBolesti)
+		Number(intValue > 5) from accumulate (
+			$d : Diagnose(
+				containsAnalgetics() == true
+			)from $diag,
+			init(int count = 0;),
+			action(if((trenutniDatum.getTime() - $d.datumDijagnoze.getTime()) < sestMeseci) {count++;}),
+			result(count)
+		)
+		Number(intValue > 2) from accumulate (
+			$d : Diagnose(
+				$l : lekar not memberOf lekari, lekari not contains lekar 
+			)from $diag,
+			init(int count = 0;),
+			action(count++; lekari.add($l);),
+			result(count)
+		)
+	then
+		lekari.clear();
+		insert (new Izvestaj($p.getFirstName(),$p.getLastName(),"Moguci zavisnik"));
+end
+	
+rule "Izbacivanje pacijenata koji su bolovali od bolesti za koje im nisu bili prepisani antibiotici"
+	agenda-group "oslabljeniImunitet"
+	salience 2
+	when
+		$p : Patient($diag : dijagnostikovaneBolesti)
+		$di : Diagnose(containsAntibiotics() == true, godina() == true) from $diag
+	then
+		delete($p);
+end
+
+rule "Ciscenje bolesti"
+	agenda-group "oslabljeniImunitet"
+	salience 3
+	when
+		Patient()
+	then
+		imunitetBolesti.clear();
+end
+
+rule "Pravljenje izvestaja za pacijente sa oslabljenim imunitetom" 
+	agenda-group "oslabljeniImunitet"
+	salience 1
+	when
+		$p : Patient($diag : dijagnostikovaneBolesti)
+		Number(intValue > 10) from accumulate (
+			$d : Diagnose(
+				containsAntibiotics() == false
+			)from $diag,
+			init(int count = 0;),
+			action(if((trenutniDatum.getTime() - $d.datumDijagnoze.getTime()) < godina) {count++;}),
+			result(count)
+		)
+		Number(intValue > 1) from accumulate (
+			$d : Diagnose(
+				$ill : dijagnostikovanaBolest not memberOf imunitetBolesti, imunitetBolesti not contains dijagnostikovanaBolest 
+			)from $diag,
+			init(int count = 0;),
+			action(count++; imunitetBolesti.add($ill);),
+			result(count)
+		)
+	then
+		imunitetBolesti.clear();
+		insert (new Izvestaj($p.getFirstName(),$p.getLastName(),"Oslabljen imunitet"));
+end
+
+rule "Alergican na lek"
+	agenda-group "validacijaDijagnoze"
+	when
+		$p : Patient($alg : alergije)
+		$d : Diagnose($lekovi : prepisaniLekovi)
+		$lek: Drug($imeLeka : name memberOf $alg) from $lekovi
+	then
+		insert(new String($imeLeka));	
+end
+
+
+rule "Alergican na sastojak"
+	agenda-group "validacijaDijagnoze"
+	when
+		$d : Diagnose($lekovi : prepisaniLekovi)
+		$lek: Drug($sastojciLeka : ingredients) from $lekovi
+		$sastojak : String() from $sastojciLeka
+		$p : Patient($alg : alergije contains $sastojak)
+	then
+		insert(new String($sastojak));
+end
