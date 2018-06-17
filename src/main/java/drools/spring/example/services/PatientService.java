@@ -16,6 +16,14 @@ import com.mongodb.client.MongoCollection;
 
 import drools.spring.example.facts.Admin;
 import drools.spring.example.facts.Diagnose;
+import drools.spring.example.facts.DijalizaEvent;
+import drools.spring.example.facts.HAEvent;
+import drools.spring.example.facts.HBEvent;
+import drools.spring.example.facts.MEvent;
+import drools.spring.example.facts.MPatient;
+import drools.spring.example.facts.NivoKiseonika;
+import drools.spring.example.facts.OxygenEvent;
+import drools.spring.example.facts.OxygenProblemEvent;
 import drools.spring.example.facts.Patient;
 import drools.spring.example.repositories.MongoProvider;
 import static com.mongodb.client.model.Filters.eq;
@@ -25,6 +33,8 @@ public class PatientService implements IPatientService {
 	private static Gson g = new Gson();
 	
 	private final KieContainer kieContainer;
+	
+	private KieSession mSession;
 	
 	@Autowired
 	public PatientService(KieContainer kieContainer) {
@@ -119,4 +129,85 @@ public class PatientService implements IPatientService {
 		return a;
 	}
 
+	public Patient getPatientByName(String name) {
+		MongoProvider m = new MongoProvider();
+		MongoCollection<Document> patients = m.getDB().getCollection("patients");
+		FindIterable<Document> pat = patients.find(eq("firstName",name));
+		
+		Patient p = g.fromJson(pat.first().toJson(), Patient.class);
+		
+		m.closeDB();
+
+		return p;
+	}
+
+	public ArrayList<MPatient> getMPatients() {
+		MongoProvider m = new MongoProvider();
+		MongoCollection<Document> patients = m.getDB().getCollection("Mpatients");
+		List<Document> patientsList = (List<Document>) patients.find().into(new ArrayList<Document>());
+		ArrayList<MPatient> p = new ArrayList<MPatient>();
+		
+		for(Document doc : patientsList) {
+			p.add(g.fromJson(doc.toJson(), MPatient.class));
+		}
+		
+		mSession = kieContainer.newKieSession("ExampleSession");
+
+		m.closeDB();
+		return p;
+	}
+
+	public MPatient setKiseonik(MPatient p, int kiseonik) throws Exception {
+		p.setKiseonik(p.getKiseonik() + kiseonik);
+		
+		OxygenEvent oe = new OxygenEvent(p.getIme(),kiseonik);
+		NivoKiseonika nk = new NivoKiseonika(p.getIme(),p.getKiseonik());
+		
+		mSession.insert(oe);
+		mSession.insert(nk);
+		mSession.getAgenda().getAgendaGroup("monitoring").setFocus();
+		mSession.fireAllRules();
+		
+		for(Object o : mSession.getObjects()) {
+			if(o.getClass() == OxygenProblemEvent.class) {
+				throw new Exception();
+			}
+		}
+		
+		return p;
+	}
+
+	public MPatient setOtkucaje(MPatient p, int otkucaji) throws Exception {
+		p.setOtkucaji(p.getOtkucaji() + otkucaji);
+		HBEvent hbe = new HBEvent(p.getIme());
+		
+		mSession.insert(hbe);
+		mSession.getAgenda().getAgendaGroup("monitoring").setFocus();
+		mSession.fireAllRules();
+		
+		for(Object o : mSession.getObjects()) {
+			if(o.getClass() == HAEvent.class) {
+				throw new Exception();
+			}
+		}
+		
+		return p;
+	}
+
+	public MPatient setMokracu(MPatient p, int mokraca) throws Exception{
+		p.setMokraca(p.getMokraca()+mokraca);
+		
+		MEvent me = new MEvent(p.getIme(),mokraca,p.isBoluje());
+		mSession.insert(me);
+		mSession.getAgenda().getAgendaGroup("monitoring").setFocus();
+		mSession.fireAllRules();
+		
+		for(Object o : mSession.getObjects()) {
+			if(o.getClass() == DijalizaEvent.class) {
+				throw new Exception();
+			}
+		}
+		
+		return p;
+	}
 }

@@ -14,6 +14,13 @@ import drools.spring.example.facts.Doctor;
 import drools.spring.example.facts.Drug;
 import drools.spring.example.facts.Diagnose;
 import drools.spring.example.facts.Patient;
+import drools.spring.example.facts.HAEvent;
+import drools.spring.example.facts.HBEvent;
+import drools.spring.example.facts.OxygenEvent;
+import drools.spring.example.facts.OxygenProblemEvent;
+import drools.spring.example.facts.NivoKiseonika;
+import drools.spring.example.facts.MEvent;
+import drools.spring.example.facts.DijalizaEvent;
 
 //declare any global variables here
 
@@ -276,3 +283,66 @@ rule "Alergican na sastojak"
 	then
 		insert(new String($sastojak));
 end
+
+
+rule "Ubrzan srcani ritam"
+	agenda-group "monitoring"
+	when
+		$h : HBEvent($i : ime)
+        Number(intValue >= 20) from accumulate(
+            $h2: HBEvent(
+                this != $h, 
+                ime == $i, 
+                this meets[10s] $h
+            ),
+            count($h2)
+        )
+	then
+		insert(new HAEvent());
+end
+
+rule "Problem sa kiseonikom"
+	agenda-group "monitoring"
+	when
+		$o : OxygenEvent($i : ime)
+		Number(intValue <1) from accumulate(
+            $o2: OxygenEvent(
+                this != $o, 
+                ime == $i,
+                vrednost > 0, 
+                this meets[10s] $o
+            ),
+            count($o2)
+        )
+        $n : NivoKiseonika(vrednost < 70, ime == $i)
+	then
+		insert(new OxygenProblemEvent());
+end
+
+rule "Hitno potrebna dijaliza"
+	agenda-group "monitoring"
+	when
+	    $h : HBEvent($i : ime)
+        Number(intValue >= 10) from accumulate(
+            $h2: HBEvent(
+                this != $h, 
+                ime == $i, 
+                this meets[10s] $h
+            ),
+            count($h2)
+        )
+        Number(intValue < 100) from accumulate(
+        	$m : MEvent(
+        		ime == $i,
+        		$k : kolicina,
+        		boluje == true,
+        		this meets[12h] $h
+        	),
+        	sum($k)
+        )
+	then
+		insert(new DijalizaEvent());
+end
+
+
+
